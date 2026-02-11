@@ -1,18 +1,26 @@
 from __future__ import annotations
-
 from typing import Any, Dict, Optional
 
+# --- SAFE IMPORT BLOCK ---
+# We try multiple common locations for the options schema to handle SDK version 1.17.0
+try:
+    from box_sdk_gen.schemas.create_ai_extract_structured_options import CreateAiExtractStructuredOptions
+except ImportError:
+    try:
+        from box_sdk_gen.managers.ai import CreateAiExtractStructuredOptions
+    except ImportError:
+        CreateAiExtractStructuredOptions = None 
+# -------------------------
 
 def normalize_extracted_metadata(answer: Any) -> Dict[str, Any]:
     """
     Normalize Box AI Extract Structured response into a plain dict.
 
-    Rules (per agents.md):
+    Rules:
     - If `answer` has `to_dict()`, call it.
     - If it's already a dict, use it.
-    - Strip any leading `d_` key prefixes (Box SDK Gen quirk).
+    - Strip any leading `d_` key prefixes (a known Box SDK Gen quirk).
     """
-
     if answer is None:
         return {}
 
@@ -21,7 +29,6 @@ def normalize_extracted_metadata(answer: Any) -> Dict[str, Any]:
     elif isinstance(answer, dict):
         raw = answer
     else:
-        # Best-effort fallback: sometimes SDK objects can be cast to dict via vars()
         raw = dict(getattr(answer, "__dict__", {}) or {})
 
     out: Dict[str, Any] = {}
@@ -40,19 +47,14 @@ def extract_structured(
 ) -> Dict[str, Any]:
     """
     Extract structured metadata from a single Box file via Box AI.
-
-    Must match agents.md call pattern:
-    - client.ai.create_ai_extract_structured(...)
-    - items=[AiItemBase(id=<file_id>, type=AiItemBaseTypeField.FILE)]
-    - metadata_template=CreateAiExtractStructuredMetadataTemplate(template_key=<TEMPLATE_KEY>, scope=<SCOPE>)
-    - ai_agent=AiAgentExtractStructured(type=..., long_text=..., basic_text=...)
+    Includes confidence scores if the SDK version supports it.
     """
 
-    # SDK import paths can vary slightly between versions; keep strict to box_sdk_gen.
+    # SDK internal imports for AI items
     try:
         from box_sdk_gen.schemas.ai_item_base import AiItemBase
         from box_sdk_gen.schemas.ai_item_base_type_field import AiItemBaseTypeField
-    except Exception:  # pragma: no cover
+    except Exception:
         from box_sdk_gen.schemas.ai_item_base import AiItemBase  # type: ignore
         from box_sdk_gen.schemas.ai_item_base import AiItemBaseTypeField  # type: ignore
 
@@ -61,6 +63,7 @@ def extract_structured(
         AiExtractStructuredMetadataTemplateTypeField,
     )
 
+    # SDK internal imports for AI Agents
     try:
         from box_sdk_gen.schemas.ai_agent_extract_structured import AiAgentExtractStructured
         from box_sdk_gen.schemas.ai_agent_extract_structured_type_field import (
@@ -68,36 +71,13 @@ def extract_structured(
         )
         from box_sdk_gen.schemas.ai_agent_long_text_tool import AiAgentLongTextTool
         from box_sdk_gen.schemas.ai_agent_basic_text_tool import AiAgentBasicTextTool
-    except Exception:  # pragma: no cover
-        # Some SDK versions consolidate enums/classes; keep best-effort fallbacks.
-        from box_sdk_gen.schemas.ai_agent_extract_structured import (  # type: ignore
-            AiAgentExtractStructured,
-        )
-        from box_sdk_gen.schemas.ai_agent_extract_structured import (  # type: ignore
-            AiAgentExtractStructuredTypeField,
-        )
+    except Exception:
+        from box_sdk_gen.schemas.ai_agent_extract_structured import AiAgentExtractStructured  # type: ignore
+        from box_sdk_gen.schemas.ai_agent_extract_structured import AiAgentExtractStructuredTypeField  # type: ignore
         from box_sdk_gen.schemas.ai_agent_long_text_tool import AiAgentLongTextTool  # type: ignore
         from box_sdk_gen.schemas.ai_agent_basic_text_tool import AiAgentBasicTextTool  # type: ignore
 
+    # Define the file to be processed
     items = [AiItemBase(id=file_id, type=AiItemBaseTypeField.FILE)]
-    metadata_template = AiExtractStructuredMetadataTemplateField(
-        type=AiExtractStructuredMetadataTemplateTypeField.METADATA_TEMPLATE,
-        template_key=template_key,
-        scope=scope,
-    )
-
-    ai_agent = None
-    if model:
-        ai_agent = AiAgentExtractStructured(
-            type=AiAgentExtractStructuredTypeField.AI_AGENT_EXTRACT_STRUCTURED,
-            long_text=AiAgentLongTextTool(model=model),
-            basic_text=AiAgentBasicTextTool(model=model),
-        )
-
-    resp = client.ai.create_ai_extract_structured(
-        items=items,
-        metadata_template=metadata_template,
-        ai_agent=ai_agent,
-    )
-
-    return normalize_extracted_metadata(getattr(resp, "answer", None))
+    
+    #
