@@ -1,174 +1,102 @@
-from __future__ import annotations
-
 import argparse
+import os
+import sys
 from typing import Optional
+
+# Add the project root to sys.path so we can import from src
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.box_client import load_env, get_box_client
 from src.extract import extract_structured
-from src.metadata import write_metadata
 
+def main():
+    parser = argparse.ArgumentParser(description="Box AI Metadata Extraction CLI")
+    parser.add_argument("--file-id", type=str, help="Single Box File ID to process")
+    parser.add_argument("--folder-id", type=str, help="Box Folder ID to process all files within")
+    parser.add_argument("--template-key", type=str, help="Metadata template key (optional; defaults from env)")
+    parser.add_argument("--scope", type=str, help="Metadata template scope (optional)")
+    parser.add_argument("--model", type=str, help="AI model to use (optional)")
+    
+    args = parser.parse_args()
 
-def _add_run_args(p: argparse.ArgumentParser) -> None:
-    target = p.add_mutually_exclusive_group(required=True)
-    target.add_argument("--file-id", help="Box file ID to process.")
-    target.add_argument("--folder-id", help="Box folder ID to process (all files in folder).")
-    p.add_argument(
-        "--template-key",
-        default=None,
-        help="Metadata template key (defaults to env BOX_METADATA_TEMPLATE_KEY).",
-    )
-    p.add_argument(
-        "--scope",
-        default=None,
-        help="Metadata template scope (defaults to env BOX_METADATA_SCOPE or enterprise_{BOX_ENTERPRISE_ID}).",
-    )
-    p.add_argument(
-        "--model",
-        default=None,
-        help="Optional AI model override (defaults to env BOX_AI_MODEL).",
-    )
-    p.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Extract and print metadata, but do not write to Box.",
-    )
-    p.add_argument(
-        "--limit",
-        type=int,
-        default=1000,
-        help="Folder listing page size (only used with --folder-id).",
-    )
+    if not args.file_id and not args.folder_id:
+        print("Error: You must provide either --file-id or --folder-id")
+        return 1
 
-
-def _folder_items(client, folder_id: str, limit: int):
-    """
-    Yield items from a folder.
-
-    Uses marker-based pagination if available; otherwise falls back to single page.
-    """
-
-    marker = None
-    while True:
-        try:
-            if marker:
-                resp = client.folders.get_folder_items(folder_id=folder_id, limit=limit, marker=marker)
-            else:
-                resp = client.folders.get_folder_items(folder_id=folder_id, limit=limit)
-        except TypeError:
-            # Some SDK versions may not accept marker; single-page fallback.
-            resp = client.folders.get_folder_items(folder_id=folder_id, limit=limit)
-            marker = None
-
-        entries = getattr(resp, "entries", None)
-        if entries is None:
-            entries = getattr(resp, "items", None)
-        if entries is None:
-            entries = []
-
-        for item in entries:
-            yield item
-
-        next_marker = getattr(resp, "next_marker", None) or getattr(resp, "nextMarker", None)
-        if not next_marker or marker is None and marker is None:
-            break
-        marker = next_marker
-
-
-def main(argv: Optional[list[str]] = None) -> int:
-    parser = argparse.ArgumentParser(prog="box-extract-demo", add_help=True)
-    sub = parser.add_subparsers(dest="cmd", required=True)
-
-    run_p = sub.add_parser("run", help="Extract structured metadata for one file and write it back to Box.")
-    _add_run_args(run_p)
-
-    args = parser.parse_args(argv)
-
-    # Load env (fail fast on missing config)
-    env = load_env()
-
-    template_key = (args.template_key or env.metadata_template_key).strip()
-    scope = (args.scope or env.metadata_scope).strip()
-    model = (args.model or env.ai_model)
-
+    # Load credentials and authenticate
     print("[Step 1] Authenticating with Box (CCG)...")
-    client = get_box_client()
+    env = load_env()
+    client = get_box_client(env)
+    
+    # Use Enterprise ID from environment configuration
+    enterprise_id = env.enterprise_id
+    scope = args.scope or env.metadata_scope
+    template_key = args.template_key or env.metadata_template_key
+    model = args.model or env.ai_model
 
+    print(f"Using scope: {scope}")
+    print(f"Using template key: {template_key}")
+
+    # Determine which files to process
+    file_ids = []
     if args.file_id:
-        file_id = args.file_id.strip()
-        if not file_id:
-            raise RuntimeError("--file-id cannot be empty")
+        file_ids.append(args.file_id)
+    elif args.folder_id:
+        print(f"Listing files in folder {args.folder_id}...")
+        items = client.folders.get_folder_items(args.folder_id)
+        for item in items.entries:
+            if item.type == "file":
+                file_ids.append(item.id)
+        print(f"Found {len(file_ids)} files to process.")
 
-        print("[Step 2] Extracting structured metadata...")
-        extracted = extract_structured(
-            client=client,
-            file_id=file_id,
-            template_key=template_key,
-            scope=scope,
-            model=model,
-        )
-
-        print("[Step 3] Normalized extracted metadata:")
-        print(extracted)
-
-        if args.dry_run:
-            print("✅ Done (dry-run; not writing metadata).")
-            return 0
-
-        print("[Step 4] Writing metadata to Box...")
-        write_metadata(
-            client=client,
-            file_id=file_id,
-            template_key=template_key,
-            metadata_dict=extracted,
-        )
-
-        print("✅ Done")
-        return 0
-
-    folder_id = args.folder_id.strip()
-    if not folder_id:
-        raise RuntimeError("--folder-id cannot be empty")
-
-    print("[Step 2] Listing folder items...")
-    items = list(_folder_items(client=client, folder_id=folder_id, limit=args.limit))
-    file_items = [it for it in items if getattr(it, "type", None) == "file"]
-    file_ids = [getattr(it, "id", None) for it in file_items if getattr(it, "id", None)]
-
-    total = len(file_ids)
-    print(f"[Step 3] Processing {total} file(s) in folder...")
-
-    for i, fid in enumerate(file_ids, start=1):
-        print(f"[{i}/{total}] Processing file {fid}")
+    # Process files
+    for idx, f_id in enumerate(file_ids, 1):
+        print(f"\n[{idx}/{len(file_ids)}] Processing file {f_id}...")
         try:
+            # Step 2 & 3: Extract and Normalize
+            print("[Step 2] Extracting structured metadata...")
             extracted = extract_structured(
                 client=client,
-                file_id=str(fid),
+                file_id=f_id,
                 template_key=template_key,
                 scope=scope,
-                model=model,
+                model=model
             )
 
-            print(extracted)
+            print("[Step 3] Normalized extracted metadata:")
 
-            if args.dry_run:
+            # NEW LOGIC: Check if we actually got data back
+            if not extracted or all(v is None for v in extracted.values()):
+                print(f"⚠️  Skipping: AI could not extract any data for file {f_id}.")
                 continue
 
-            write_metadata(
-                client=client,
-                file_id=str(fid),
-                template_key=template_key,
-                metadata_dict=extracted,
-            )
-        except Exception as e:  # noqa: BLE001
-            print(f"⚠️  Warning: failed processing file {fid}: {e}")
-            continue
+            print(f"Extracted Metadata: {extracted}")
 
-    if args.dry_run:
-        print("✅ Done (dry-run; not writing metadata).")
-    else:
-        print("✅ Done")
+            # Step 4: Write metadata to Box
+            print("[Step 4] Writing metadata to Box...")
+            client.file_metadata.create_file_metadata_by_id(
+                file_id=f_id,
+                scope=scope,
+                template_key=template_key,
+                data=extracted
+            )
+            print(f"✅ Successfully updated metadata for {f_id}")
+
+        except Exception as e:
+            # Check if error is because metadata already exists
+            if "already_exists" in str(e).lower():
+                print(f"ℹ️  Metadata already exists for file {f_id}. Updating instead...")
+                client.file_metadata.update_file_metadata_by_id(
+                    file_id=f_id,
+                    scope=scope,
+                    template_key=template_key,
+                    update_operation=[{"op": "replace", "path": f"/{k}", "value": v} for k, v in extracted.items()]
+                )
+            else:
+                print(f"❌ Error processing file {f_id}: {e}")
+
+    print("\n✅ Done")
     return 0
 
-
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())

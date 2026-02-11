@@ -56,19 +56,22 @@ def load_env() -> BoxEnv:
     )
 
 
-def get_box_client():
+def get_box_client(env: Optional[BoxEnv] = None):
     """
     Return a BoxClient authenticated with CCG (enterprise).
 
-    TODO: Implement using box_sdk_gen per agents.md:
-      - CCGConfig(client_id, client_secret, enterprise_id)
-      - BoxCCGAuth(config=...)
-      - BoxClient(auth=auth)
+    Args:
+        env: Optional BoxEnv instance. If not provided, load_env() will be called.
+
+    Returns:
+        Authenticated BoxClient instance.
     """
     # Local imports keep import-time side effects minimal for CLI help usage.
     from box_sdk_gen import BoxClient, BoxCCGAuth, CCGConfig
 
-    env = load_env()
+    if env is None:
+        env = load_env()
+    
     config = CCGConfig(
         client_id=env.client_id,
         client_secret=env.client_secret,
