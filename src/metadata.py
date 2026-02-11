@@ -62,7 +62,7 @@ def write_metadata(
     update_fn = getattr(client.file_metadata, "update_file_metadata_by_id", None)
     if not callable(update_fn):
         print(
-            "⚠️  Metadata already exists; update is not available in this SDK version. "
+            "[WARNING] Metadata already exists; update is not available in this SDK version. "
             "Skipping write-back."
         )
         return
@@ -76,4 +76,4 @@ def write_metadata(
             request_body=ops,
         )
     except Exception as e:  # noqa: BLE001
-        print(f"⚠️  Metadata already exists but update failed: {e}")
+        print(f"[WARNING] Metadata already exists but update failed: {e}")

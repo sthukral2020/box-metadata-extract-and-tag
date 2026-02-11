@@ -8,6 +8,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.box_client import load_env, get_box_client
 from src.extract import extract_structured
+from src.metadata import write_metadata
 
 def main():
     parser = argparse.ArgumentParser(description="Box AI Metadata Extraction CLI")
@@ -67,35 +68,25 @@ def main():
 
             # NEW LOGIC: Check if we actually got data back
             if not extracted or all(v is None for v in extracted.values()):
-                print(f"⚠️  Skipping: AI could not extract any data for file {f_id}.")
+                print(f"[WARNING] Skipping: AI could not extract any data for file {f_id}.")
                 continue
 
             print(f"Extracted Metadata: {extracted}")
 
             # Step 4: Write metadata to Box
             print("[Step 4] Writing metadata to Box...")
-            client.file_metadata.create_file_metadata_by_id(
+            write_metadata(
+                client=client,
                 file_id=f_id,
-                scope=scope,
                 template_key=template_key,
-                data=extracted
+                metadata_dict=extracted
             )
-            print(f"✅ Successfully updated metadata for {f_id}")
+            print(f"[SUCCESS] Successfully updated metadata for {f_id}")
 
         except Exception as e:
-            # Check if error is because metadata already exists
-            if "already_exists" in str(e).lower():
-                print(f"ℹ️  Metadata already exists for file {f_id}. Updating instead...")
-                client.file_metadata.update_file_metadata_by_id(
-                    file_id=f_id,
-                    scope=scope,
-                    template_key=template_key,
-                    update_operation=[{"op": "replace", "path": f"/{k}", "value": v} for k, v in extracted.items()]
-                )
-            else:
-                print(f"❌ Error processing file {f_id}: {e}")
+            print(f"[ERROR] Error processing file {f_id}: {e}")
 
-    print("\n✅ Done")
+    print("\n[SUCCESS] Done")
     return 0
 
 if __name__ == "__main__":

@@ -80,4 +80,27 @@ def extract_structured(
     # Define the file to be processed
     items = [AiItemBase(id=file_id, type=AiItemBaseTypeField.FILE)]
     
-    #
+    # Create metadata template object
+    metadata_template = AiExtractStructuredMetadataTemplateField(
+        type=AiExtractStructuredMetadataTemplateTypeField.METADATA_TEMPLATE,
+        template_key=template_key,
+        scope=scope,
+    )
+    
+    # Create AI agent (optional; only if model is provided)
+    ai_agent = None
+    if model:
+        ai_agent = AiAgentExtractStructured(
+            type=AiAgentExtractStructuredTypeField.AI_AGENT_EXTRACT_STRUCTURED,
+            long_text=AiAgentLongTextTool(model=model),
+            basic_text=AiAgentBasicTextTool(model=model),
+        )
+    
+    # Call Box AI Extract Structured API
+    resp = client.ai.create_ai_extract_structured(
+        items=items,
+        metadata_template=metadata_template,
+        ai_agent=ai_agent,
+    )
+    
+    return normalize_extracted_metadata(getattr(resp, "answer", None))
